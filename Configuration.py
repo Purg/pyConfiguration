@@ -6,9 +6,9 @@ Python configuration encapsulation
 Designed for easy dynamic access. Currently adheres to the INI file format of
 a single layer of sections, with each section containing option/value pairs.
 
-Configuration and section objects have no methods and are meant to be
-manipulated without functional aid. The option classes have functions to access
-option name and value casting.
+Configuration and section objects have no callable methods in order to allow
+simple dynamic access (the option classes have functions to access option name
+and value casting).
 
 Plans
 -----
@@ -20,6 +20,13 @@ children).
 
 from ConfigParser import SafeConfigParser
 import logging
+
+
+__all__ = [
+    "Configuration",
+    "load_ini_configuration",
+    "save_ini_configuration",
+]
 
 
 class ConfigOption (object):
