@@ -2,19 +2,7 @@
 """
 Python configuration encapsulation
 ==================================
-
-Designed for easy dynamic access. Currently adheres to the INI file format of
-a single layer of sections, with each section containing option/value pairs.
-
-Configuration and section objects have no callable methods in order to allow
-simple dynamic access (the option classes have functions to access option name
-and value casting).
-
-Plans
------
-Move away from INI file format and into nested structure configuration, allowing
-ability to nest sections (ConfigItem base class, options + sections are
-children).
+Configuration objects that may container options or sub-configuration layers.
 
 License (MIT)
 =============
@@ -40,273 +28,195 @@ THE SOFTWARE.
 
 """
 
-from ConfigParser import SafeConfigParser
-import logging
+from __future__ import print_function
+
+from . import errors
+from .ConfigurationOption import ConfigurationOption
 
 
 __all__ = [
     "Configuration",
-    "load_ini_configuration",
-    "save_ini_configuration",
 ]
-
-
-class ConfigOption (object):
-    """ Light encapsulation of a configuration option
-    """
-
-    def __init__(self, name, value=None, description=None):
-        self.__option_name = name
-        self.__option_value = value
-        self.__option_description = description
-
-    def __call__(self):
-        """
-        :return: Option value in native format
-        """
-        return self.__option_value
-
-    @property
-    def name(self):
-        return self.__option_name
-
-    @property
-    def description(self):
-        return self.__option_description
-
-    @description.setter
-    def description(self, value):
-        self.__option_description = str(value)
-
-    def __repr__(self):
-        return "ConfigOption{%s, %s}" % (self.__option_name,
-                                         self.__option_value)
-
-    @property
-    def str(self):
-        """
-        :return: Option value as a string
-        :rtype: str
-        """
-        return str(self.__option_value)
-
-    @property
-    def __str__(self):
-        return self.str
-
-    @property
-    def int(self):
-        """
-        :return: Option value as an int
-        :rtype: int
-        """
-        return int(self.__option_value)
-
-    def __int__(self):
-        return self.int
-
-    @property
-    def float(self):
-        """
-        :return: Option value as a float
-        :rtype: float
-        """
-        return float(self.__option_value)
-
-    def __float__(self):
-        return self.float
-
-    @property
-    def bool(self):
-        """
-        :return: Option value as a boolean
-        :rtype: bool
-        """
-        return bool(self.__option_value)
-
-    def __nonzero__(self):
-        return self.bool
-
-
-class ConfigSection (object):
-    """ Light encapsulation of a configuration section """
-
-    def __init__(self, name):
-        # preventing infinite loop with presence of get/setattr functions
-        self.__dict__['_ConfigSection__section_name'] = name
-        self.__dict__['_ConfigSection__section_options'] = {}
-
-    def __repr__(self):
-        return "ConfigSection{%s, %s}" % (self.__section_name,
-                                          self.__section_options.values())
-
-    def __call__(self):
-        return self.__section_name
-
-    def __contains__(self, opt):
-        if isinstance(opt, ConfigOption):
-            return opt in self.__section_options.values()
-        # else assuming its a key
-        return opt in self.__section_options
-
-    def __getattr__(self, opt):
-        """ Get the value of an option in this section """
-        return self.__section_options[opt]
-
-    def __setattr__(self, key, value):
-        """ Set the given key and value to this section """
-        if not isinstance(value, ConfigOption):
-            value = ConfigOption(key, value)
-        self.__section_options[key] = value
-
-    def __iter__(self):
-        for v in self.__section_options.itervalues():
-            yield v
-
-    def __len__(self):
-        return len(self.__section_options)
 
 
 class Configuration (object):
     """
-    Configuration encapsulation object with IO capabilities based on INI file
-    configuration.
+    Container of options and sub-configurations
 
-    Uses the SafeConfigCommentParser object for IO.
+    Options may be accessed and set by either methods, bracket notation or
+    dot notation. To use dot notation for getting/setting, the naming of the
+    option must not conflict with named components of python class/instance
+    (error raised).
+
+    Option descriptions / comments may only be set via the set_option method or
+    by accessing a set option.
 
     """
 
     def __init__(self, name=None):
-        """
-        Initialize a new configuration.
+        """ Initialize a new configuration block
 
-        Optionally, a configuration file path may be provided to initialize
-        from. When this is done, we cannot infer the option value types, so all
-        options are loaded in as strings.
+        :param name: A name or None
+        :type name: None or str
 
         """
-        self.__dict__['_Configuration__name'] = name or "Configuration"
-        self.__dict__['_Configuration__sections'] = {}
+        # because of use of __getattr__
+        self.__dict__['_Configuration__name'] = name
+        self.__dict__['_Configuration__options'] = {}
 
-    def __get_section(self, sect):
-        if sect not in self.__sections:
-            self.__sections[sect] = ConfigSection(sect)
-        return self.__sections[sect]
-
-    def __repr__(self):
-        return "Configuration{%s, %s}" % (self.__name,
-                                          self.__sections.values())
-
-    def __str__(self):
-        ret_str = "{{ Configuration - %s }}\n" % self.__name
-        for s in self:
-            ret_str += "[%s]\n" % s()
-            for o in s:
-                ret_str += "  %s = %s\n" % (o.name, o())
-        return ret_str
-
-    def __call__(self):
+    @property
+    def name(self):
         return self.__name
 
-    def __getattr__(self, item):
-        """ dot access """
-        return self.__get_section(item)
+    def __repr__(self):
+        return "Configuration{%s}" % self.name
 
-    def __getitem__(self, item):
-        """ bracket access """
-        return self.__get_section(item)
+    @staticmethod
+    def __key_name(item):
+        # given may be a string, ConfigurationOption or a Configuration. Extract
+        # name and compare against our option keys (names).
+        if isinstance(item, (Configuration, ConfigurationOption)):
+            item_name = item.name
+        elif isinstance(item, str):
+            item_name = item
+        else:
+            raise errors.ConfigurationInvalidItemKeyTypeError()
+        return item_name
+
+    def get_option(self, key):
+        """ option getter helper function
+        """
+        item_name = self.__key_name(key)
+        if item_name in self.__options:
+            return self.__options[item_name]
+        else:
+            raise errors.ConfigurationKeyNotPresentError(item_name)
+
+    def set_option(self, key, value, descr=None):
+        if isinstance(value, (Configuration, ConfigurationOption)):
+            self.__options[key] = value
+            if descr:
+                self.__options[key].description = descr
+        else:
+            self.__options[key] = ConfigurationOption(key, value, descr)
+
+    def __getitem__(self, key):
+        """ option bracket access """
+        return self.get_option(key)
+
+    def __setitem__(self, key, value):
+        """ Option bracket setter """
+        return self.set_option(key, value)
+
+    def __getattr__(self, key):
+        """ Dot notation """
+        return self.get_option(key)
+
+    def __setattr__(self, key, value):
+        # Check that we're not setting class or instance names
+        if key in self.__dict__ or key in self.__class__.__dict__:
+            raise errors.ConfigurationDotNotationSetError(key)
+        self.set_option(key, value)
 
     def __contains__(self, item):
-        if isinstance(item, ConfigSection):
-            return item in self.__sections.values()
-        # else assuming its a section key
-        return item in self.__sections
+        return self.__key_name(item) in self.__options
 
     def __iter__(self):
-        for v in self.__sections.itervalues():
-            yield v
-
-    def __add__(self, other):
-        if not isinstance(other, Configuration):
-            raise ValueError("Cannot combine with something that is not "
-                             "another Configuration instance.")
-        c = Configuration(name='+'.join((self(), other())))
-        for s in self:
-            for o in s:
-                setattr(getattr(c, s()), o.name, o())
-        for s in other:
-            for o in s:
-                setattr(getattr(c, s()), o.name, o())
-        return c
-
-    def __iadd__(self, other):
-        if not isinstance(other, Configuration):
-            raise ValueError("Cannot combine with something that is not "
-                             "another Configuration instance.")
-        for s in other:
-            for o in s:
-                setattr(getattr(self, s()), o.name, o())
-        return self
+        for k in self.__options:
+            yield k
 
     def __len__(self):
-        return len(self.__sections)
+        return len(self.__options)
+
+    # TODO: Merge functionality
+    # def __add__(self, other):
+    #     if not isinstance(other, Configuration):
+    #         raise ValueError("Cannot combine with something that is not "
+    #                          "another Configuration instance.")
+    #     c = Configuration(name='+'.join((self.name, other.name)))
+    #     for s in self:
+    #         for o in s:
+    #             setattr(getattr(c, s()), o.name, o())
+    #     for s in other:
+    #         for o in s:
+    #             setattr(getattr(c, s()), o.name, o())
+    #     return c
+    #
+    # def __iadd__(self, other):
+    #     if not isinstance(other, Configuration):
+    #         raise ValueError("Cannot combine with something that is not "
+    #                          "another Configuration instance.")
+    #     for s in other:
+    #         for o in s:
+    #             setattr(getattr(self, s()), o.name, o())
+    #     return self
+
+    # TODO: Copy/Deepcopy methods
+    # def __copy__(self):
+    #     pass
+    # def __deepcopy__(self, memo=None):
+    #     pass
 
 
-def load_ini_configuration(*in_files, **kwds):
-    """ Load a configuration from one or more INI files.
 
-    The order in which files are specified matters. If multiple files in the
-    list have the same sections/options, the last file that defines them will
-    take precedence.
-
-    :param in_file: Files to initialize a Configuration object from.
-    :type in_file: tuple of str
-    :param partial_load_error: Flag telling us to error when input files are
-        only partially loaded. This is False by default (logging module warning
-        issued instead).
-    :type partial_load_error: bool
-
-    :return: Configuration object based on the input files
-    :rtype:
-
-    """
-    log = logging.getLogger('pyConfig.load_ini_configuration')
-
-    partial_load_error = kwds.get("partial_load_error", False)
-
-    scp_config = SafeConfigParser()
-    files_read = scp_config.read(in_files)
-    if set(in_files) != set(files_read):
-        if partial_load_error:
-            def log_func(msg):
-                raise RuntimeError(msg)
-        else:
-            log_func = log.warn
-        log_func("Failed to load all given input files")
-
-    config = Configuration()
-    for sect in scp_config.sections():
-        for opt in scp_config.options(sect):
-            setattr(getattr(config, sect), opt, scp_config.get(sect, opt))
-    return config
-
-
-def save_ini_configuration(config, out_file):
-    """ Save a configuration to file using SafeConfigParser (INI file format)
-
-    :param config: Configuration object to save
-    :type config: Configuration
-    :param out_file: Output file path
-    :type out_file: str
-
-    :return: True if save was successful, false otherwise.
-    :rtype: bool
-
-    """
-    p = SafeConfigParser()
-    for s in config:
-        if s:
-            p.add_section(s())
-            for o in s:
-                p.set(s(), o.name, o())
-    p.write(open(out_file, 'w'))
+# TODO: Move the following to the io submodule + assert that to-file
+#       configurations are strictly two levels (configuration of configurations
+#       of only options) in order to fit INI format.
+# def load_ini_configuration(*in_files, **kwds):
+#     """ Load a configuration from one or more INI files.
+#
+#     The order in which files are specified matters. If multiple files in the
+#     list have the same sections/options, the last file that defines them will
+#     take precedence.
+#
+#     :param in_file: Files to initialize a Configuration object from.
+#     :type in_file: tuple of str
+#     :param partial_load_error: Flag telling us to error when input files are
+#         only partially loaded. This is False by default (logging module warning
+#         issued instead).
+#     :type partial_load_error: bool
+#
+#     :return: Configuration object based on the input files
+#     :rtype:
+#
+#     """
+#     log = logging.getLogger('pyConfig.load_ini_configuration')
+#
+#     partial_load_error = kwds.get("partial_load_error", False)
+#
+#     scp_config = SafeConfigParser()
+#     files_read = scp_config.read(in_files)
+#     if set(in_files) != set(files_read):
+#         if partial_load_error:
+#             def log_func(msg):
+#                 raise RuntimeError(msg)
+#         else:
+#             log_func = log.warn
+#         log_func("Failed to load all given input files")
+#
+#     config = Configuration()
+#     for sect in scp_config.sections():
+#         for opt in scp_config.options(sect):
+#             setattr(getattr(config, sect), opt, scp_config.get(sect, opt))
+#     return config
+#
+#
+# def save_ini_configuration(config, out_file):
+#     """ Save a configuration to file using SafeConfigParser (INI file format)
+#
+#     :param config: Configuration object to save
+#     :type config: Configuration
+#     :param out_file: Output file path
+#     :type out_file: str
+#
+#     :return: True if save was successful, false otherwise.
+#     :rtype: bool
+#
+#     """
+#     p = SafeConfigParser()
+#     for s in config:
+#         if s:
+#             p.add_section(s())
+#             for o in s:
+#                 p.set(s(), o.name, o())
+#     p.write(open(out_file, 'w'))
